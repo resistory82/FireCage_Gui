@@ -1,0 +1,42 @@
+# ── Rust / Cargo ──────────────────────────────
+# Build-Ausgabe (kompilierte Programme, Zwischendateien – mehrere 100 MB)
+/target/
+# Sicherungskopien von rustfmt
+**/*.rs.bk
+# Windows-Debugsymbole, falls außerhalb von target abgelegt
+*.pdb
+
+# ── SQLite-Datenbanken ────────────────────────
+# Laufzeitdaten (Test- und echte Einsatzdaten) gehören nicht ins Repository.
+# Das Schema liegt als .sql in Database/ und wird weiterhin versioniert.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ── Entwicklungsumgebungen ────────────────────
+.idea/
+.vscode/
+*.iml
+
+# ── Betriebssystem ────────────────────────────
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ── Sonstiges ─────────────────────────────────
+/Aussehen
+/Database/FirecageDatabaseScema_2026-10-12T14_25_02.858Z.json
+/Database/FirecageDatabaseScema.json
+Database/FirecageDBML_2026-10-12T13_57_23.352Z.dbml
+# Sandbox-Kopien (z. B. von Bromium)
+~BROMIUM/
+# Temporäre Office-/Editor-Dateien
+~$*
+*.tmp
+*.swp
+*~
+
+
