@@ -5,6 +5,7 @@
 //! - `einsatz`:        Neuen Einsatz anlegen und laufenden Einsatz führen
 
 pub mod atemschutz;
+pub mod austausch;
 pub mod einsatz;
 pub mod konfiguration;
 pub mod start;
@@ -100,6 +101,8 @@ pub struct Formulare {
     pub ats_zeit_puffer: std::collections::HashMap<i64, String>,
     /// Nach Klick auf "Druckabfrage": Cursor ins erste Druckabfrage-Feld setzen.
     pub ats_fokus_abfrage: bool,
+    // Import-Vorschau (Stammdaten), solange der Dialog offen ist
+    pub import: Option<austausch::ImportVorschau>,
     // Bestätigungsdialog "Einsatz beenden" ist geöffnet
     pub beenden_dialog: bool,
 }

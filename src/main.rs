@@ -10,6 +10,7 @@
 mod ansichten;
 mod db;
 mod model;
+mod stammdaten;
 mod theme;
 
 use ansichten::{Ansicht, EinsatzTab, Formulare};
@@ -261,6 +262,9 @@ impl eframe::App for App {
                 }
             });
 
+        // Import-Vorschau für Stammdaten (erscheint nur, wenn eine Datei geladen wurde)
+        ansichten::austausch::dialog(self, ctx);
+
         // Runder "+"-Knopf unten rechts (nur auf Start und in der Einsatzliste).
         if matches!(self.ansicht, Ansicht::Start | Ansicht::LetzteEinsaetze) && theme::plus_knopf(ctx) {
             self.f.neuer_einsatz = Default::default();
@@ -283,11 +287,23 @@ impl eframe::App for FehlerApp {
 }
 
 fn main() -> eframe::Result<()> {
+    // Fenster: startet maximiert (volle Bildschirmgröße, Taskleiste bleibt sichtbar).
+    // `with_inner_size` gilt nur, wenn man das Fenster später "wiederherstellt".
+    let mut fenster = egui::ViewportBuilder::default()
+        .with_title("Firecage")
+        .with_maximized(true)
+        .with_inner_size([1600.0, 900.0])
+        .with_min_inner_size([1024.0, 640.0]);
+
+    // Fenster- und Taskleistensymbol: Firecage-Logo als PNG (in die .exe eingebettet).
+    // Schlägt das Laden fehl, startet das Programm trotzdem mit dem Standardsymbol.
+    match eframe::icon_data::from_png_bytes(theme::FENSTER_ICON) {
+        Ok(icon) => fenster = fenster.with_icon(icon),
+        Err(e) => eprintln!("Fenstersymbol konnte nicht geladen werden: {e}"),
+    }
+
     let optionen = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1600.0, 900.0])
-            .with_min_inner_size([1024.0, 640.0])
-            .with_title("Firecage"),
+        viewport: fenster,
         ..Default::default()
     };
     eframe::run_native(

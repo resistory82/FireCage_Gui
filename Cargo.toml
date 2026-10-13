@@ -14,3 +14,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = "0.4"
 # UUIDs für Datensätze
 uuid = { version = "1", features = ["v4"] }
+# JSON-Import/Export der Stammdaten
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Windows-Dateidialoge "Speichern unter" / "Öffnen"
+rfd = "0.15"

@@ -30,6 +30,11 @@ pub struct Db {
 }
 
 impl Db {
+    /// Direkter Zugriff auf die Verbindung (für Import/Export in `stammdaten.rs`).
+    pub fn verbindung(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Öffnet (oder erstellt) die Datenbankdatei, aktiviert Fremdschlüssel,
     /// legt die Tabellen an und befüllt Standardwerte.
     pub fn oeffnen(pfad: &str) -> Result<Self> {

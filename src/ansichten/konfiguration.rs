@@ -11,7 +11,8 @@ use eframe::egui;
 
 /// Feuerwehren anlegen und aktivieren/deaktivieren.
 pub fn feuerwehr(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Feuerwehr");
+    // Titel mit Import-/Export-Knöpfen (gemeinsame JSON-Datei für alle Stammdaten)
+    super::austausch::ueberschrift(app, ui, "Feuerwehr");
     ui.add_space(10.0);
 
     // Formular: neue Feuerwehr
@@ -63,7 +64,8 @@ pub fn feuerwehr(app: &mut App, ui: &mut egui::Ui) {
 
 /// Fahrzeuge anlegen (einer Feuerwehr zugeordnet) und aktivieren/deaktivieren.
 pub fn fahrzeugpark(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Fahrzeugpark");
+    // Titel mit Import-/Export-Knöpfen (gemeinsame JSON-Datei für alle Stammdaten)
+    super::austausch::ueberschrift(app, ui, "Fahrzeugpark");
     ui.add_space(10.0);
 
     let feuerwehren = app.ok(app.db.feuerwehr_auswahl()).unwrap_or_default();
@@ -136,7 +138,8 @@ pub fn fahrzeugpark(app: &mut App, ui: &mut egui::Ui) {
 
 /// Personal anlegen (mit Qualifikationen als Häkchen) und aktivieren/deaktivieren.
 pub fn personal(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Personal");
+    // Titel mit Import-/Export-Knöpfen (gemeinsame JSON-Datei für alle Stammdaten)
+    super::austausch::ueberschrift(app, ui, "Personal");
     ui.add_space(10.0);
 
     let feuerwehren = app.ok(app.db.feuerwehr_auswahl()).unwrap_or_default();
@@ -233,7 +236,8 @@ pub fn personal(app: &mut App, ui: &mut egui::Ui) {
 
 /// Sprechgruppen anlegen (werden im Funktagebuch benötigt).
 pub fn sprechgruppen(app: &mut App, ui: &mut egui::Ui) {
-    ui.heading("Sprechgruppen");
+    // Titel mit Import-/Export-Knöpfen (gemeinsame JSON-Datei für alle Stammdaten)
+    super::austausch::ueberschrift(app, ui, "Sprechgruppen");
     ui.add_space(10.0);
 
     ui.horizontal(|ui| {
