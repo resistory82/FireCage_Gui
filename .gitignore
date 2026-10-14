@@ -40,3 +40,6 @@ Database/FirecageDBML_2026-10-12T13_57_23.352Z.dbml
 *~
 
 
+
+# Fertige Release-Datei (wird von release.ps1 erzeugt)
+/dist/
