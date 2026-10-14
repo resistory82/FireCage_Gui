@@ -1,4 +1,4 @@
-![FireCage](https://github.com/resistory82/FireCage_App/blob/main/resources/FirecageBanner1280x640.png)
+![FireCage](https://github.com/resistory82/FireCage_Gui/blob/main/resources/FirecageBanner1280x640.png)
 
 # FireCage
 
@@ -6,8 +6,8 @@
 
 ![VersionNR](https://img.shields.io/badge/Version-v0.0.1-red.svg?style=for-the-badge)
 [![AGPL License](https://img.shields.io/badge/License-AGPL%20v3-green.svg?style=for-the-badge)](http://opensource.org/licenses/AGPL-3.0)
-![Open Issues](https://img.shields.io/github/issues/resistory82/FireCage_App?style=for-the-badge)
-![Last Commit](https://img.shields.io/github/last-commit/resistory82/FireCage_App/main.svg?style=for-the-badge)
+![Open Issues](https://img.shields.io/github/issues/resistory82/FireCage_Gui?style=for-the-badge)
+![Last Commit](https://img.shields.io/github/last-commit/resistory82/FireCage_Gui/main.svg?style=for-the-badge)
 
 Geschrieben in der Programmiersprache Rust und mit dem Framework Egui bietet Firecage eine Robuste und zukunfssichere Grundlage für die Verwendung in Einsätzen und Übungen.
 
