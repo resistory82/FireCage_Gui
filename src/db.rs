@@ -14,6 +14,12 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Result};
 /// Das Datenbankschema, beim Kompilieren aus der SQL-Datei eingelesen.
 const SCHEMA: &str = include_str!("../Database/FirecageDatabaseScema.sql");
 
+/// SQL-Ausdruck für den Anzeigetext eines Einsatzorts (Tabellen-Aliase `o` = Einsatzort,
+/// `ad` = Adresse): "Beschreibung (Straße Nr, Ortschaft)" bzw. "Beschreibung (48.20849, 16.37208)".
+const ORT_TEXT: &str = "CASE WHEN o.id IS NULL THEN NULL ELSE o.Beschreibung || COALESCE(
+        ' (' || ad.Strasse || ' ' || ad.Hausnummer || COALESCE('/' || ad.Stiege, '') || ', ' || ad.Ortschaft || ')',
+        CASE WHEN o.Breitengrad IS NOT NULL THEN printf(' (%.5f, %.5f)', o.Breitengrad, o.Laengengrad) ELSE '' END) END";
+
 /// Aktuelle Zeit als Unix-Sekunden (so werden alle Zeiten gespeichert).
 pub fn jetzt() -> i64 {
     chrono::Local::now().timestamp()
@@ -397,15 +403,17 @@ impl Db {
 
     /// Alle Aufgaben eines Einsatzes: offene zuerst, dann neueste zuerst.
     pub fn aufgaben(&self, einsatz_id: i64) -> Result<Vec<Aufgabe>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT a.id, a.Zeitpunkt, a.Erledigt, a.NachfragenUm, a.Beschreibung, k.Name, k.Farbe, f.Rufname, s.Name
-             FROM Aufgaben a
-             JOIN AufgabeKategorie k ON k.id = a.KategorieID
-             LEFT JOIN Fahrzeuge f ON f.id = a.FahrzeugID
-             LEFT JOIN Einsatzabschnitt s ON s.id = a.AbschnittID
-             WHERE a.EinsatzID = ?1
-             ORDER BY a.Erledigt, a.Zeitpunkt DESC",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT a.id, a.Zeitpunkt, a.Erledigt, a.NachfragenUm, a.Beschreibung, k.Name, k.Farbe, f.Rufname, s.Name, {ORT_TEXT}
+                 FROM Aufgaben a
+                 JOIN AufgabeKategorie k ON k.id = a.KategorieID
+                 LEFT JOIN Fahrzeuge f ON f.id = a.FahrzeugID
+                 LEFT JOIN Einsatzabschnitt s ON s.id = a.AbschnittID
+                 LEFT JOIN Einsatzort o ON o.id = a.EinsatzortID
+                 LEFT JOIN Adresse ad ON ad.id = o.AdresseID
+                 WHERE a.EinsatzID = ?1
+                 ORDER BY a.Erledigt, a.Zeitpunkt DESC"
+        ))?;
         let zeilen = stmt.query_map(params![einsatz_id], |r| {
             Ok(Aufgabe {
                 id: r.get(0)?,
@@ -417,6 +425,7 @@ impl Db {
                 farbe: r.get(6)?,
                 fahrzeug: r.get(7)?,
                 abschnitt: r.get(8)?,
+                ort: r.get(9)?,
             })
         })?;
         zeilen.collect()
@@ -446,6 +455,88 @@ impl Db {
     pub fn aufgabe_erledigt(&self, id: i64, erledigt: bool) -> Result<()> {
         self.conn
             .execute("UPDATE Aufgaben SET Erledigt = ?1 WHERE id = ?2", params![erledigt as i64, id])?;
+        Ok(())
+    }
+
+    /// Verlängert die Nachfragezeit einer Aufgabe um `minuten`.
+    /// Ist die Zeit schon abgelaufen (oder nicht gesetzt), zählt die Verlängerung ab jetzt,
+    /// sonst ab der bisherigen Nachfragezeit.
+    pub fn aufgabe_verlaengern(&self, id: i64, minuten: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE Aufgaben SET NachfragenUm = MAX(COALESCE(NachfragenUm, ?1), ?1) + ?2 WHERE id = ?3",
+            params![jetzt(), minuten * 60, id],
+        )?;
+        Ok(())
+    }
+
+    /// Alle offenen Aufgaben laufender Einsätze, deren Nachfragezeit verstrichen ist.
+    /// Liefert (Aufgaben-id, Einsatz-id, NachfragenUm, Anzeigetext).
+    pub fn faellige_aufgaben(&self) -> Result<Vec<(i64, i64, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.EinsatzID, a.NachfragenUm,
+                    k.Name || ': ' || a.Beschreibung || COALESCE(' – ' || f.Rufname, '')
+             FROM Aufgaben a
+             JOIN Einsatz e ON e.id = a.EinsatzID
+             JOIN AufgabeKategorie k ON k.id = a.KategorieID
+             LEFT JOIN Fahrzeuge f ON f.id = a.FahrzeugID
+             WHERE a.Erledigt = 0 AND a.NachfragenUm IS NOT NULL AND a.NachfragenUm <= ?1
+               AND e.Einsatzende IS NULL
+             ORDER BY a.NachfragenUm",
+        )?;
+        let zeilen = stmt.query_map(params![jetzt()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        zeilen.collect()
+    }
+
+    // ───────────────────────────── Einsatzorte ─────────────────────────────
+
+    /// Alle Einsatzorte eines Einsatzes als Auswahlliste (mit Adresse bzw. Koordinaten im Namen).
+    pub fn einsatzorte(&self, einsatz_id: i64) -> Result<Vec<Auswahl>> {
+        self.auswahl(
+            &format!(
+                "SELECT o.id, {ORT_TEXT} FROM Einsatzort o LEFT JOIN Adresse ad ON ad.id = o.AdresseID
+                 WHERE o.EinsatzID = ?1 ORDER BY o.id"
+            ),
+            params![einsatz_id],
+        )
+    }
+
+    /// Legt einen weiteren Einsatzort (mit Koordinaten und/oder Adresse) für einen Einsatz an.
+    /// Gibt die id des neuen Orts zurück.
+    pub fn einsatzort_anlegen(
+        &self,
+        einsatz_id: i64,
+        beschreibung: &str,
+        koordinaten: Option<(f64, f64)>,
+        adresse: Option<(&str, &str, &str, Option<&str>)>,
+    ) -> Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+        let adresse_id = match adresse {
+            Some((ortschaft, strasse, hausnummer, stiege)) => {
+                tx.execute(
+                    "INSERT INTO Adresse (uuid, Ortschaft, Strasse, Hausnummer, Stiege) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![neue_uuid(), ortschaft, strasse, hausnummer, stiege],
+                )?;
+                Some(tx.last_insert_rowid())
+            }
+            None => None,
+        };
+        let (laenge, breite) = match koordinaten {
+            Some((l, b)) => (Some(l), Some(b)),
+            None => (None, None),
+        };
+        tx.execute(
+            "INSERT INTO Einsatzort (Beschreibung, Laengengrad, Breitengrad, AdresseID, EinsatzID) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![beschreibung, laenge, breite, adresse_id, einsatz_id],
+        )?;
+        let ort_id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(ort_id)
+    }
+
+    /// Ordnet einer Aufgabe einen Einsatzort zu.
+    pub fn aufgabe_ort_setzen(&self, aufgabe_id: i64, ort_id: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE Aufgaben SET EinsatzortID = ?1 WHERE id = ?2", params![ort_id, aufgabe_id])?;
         Ok(())
     }
 
@@ -524,6 +615,28 @@ impl Db {
 
     // ───────────────────────────── Atemschutz ─────────────────────────────
 
+    /// Aktive Personen mit Qualifikation "ATS" für die Trupp-Auswahl.
+    /// Liefert ("Nachname Vorname", "Rang · Feuerwehr").
+    pub fn atemschutztraeger(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.Nachname || ' ' || p.Vorname, p.Rang || ' · ' || fw.Name
+             FROM Personal p JOIN Feuerwehr fw ON fw.id = p.FeuerwehrID
+             WHERE p.aktiv = 1 AND EXISTS (
+                 SELECT 1 FROM PersonalQualifikation pq JOIN Qualifikation q ON q.id = pq.QualifikationID
+                 WHERE pq.PersonalID = p.id AND upper(q.Kurzname) = 'ATS')
+             ORDER BY p.Nachname, p.Vorname",
+        )?;
+        let zeilen = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        zeilen.collect()
+    }
+
+    /// ids aller noch laufenden Einsätze (für die Atemschutz-Erinnerungen).
+    pub fn laufende_einsaetze(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM Einsatz WHERE Einsatzende IS NULL")?;
+        let zeilen = stmt.query_map([], |r| r.get(0))?;
+        zeilen.collect()
+    }
+
     /// Spaltennamen der Atemschutz-Tabelle je Rolle (0 = ATF, 1 = ATM, 2 = WTF):
     /// [Name, Anfangsdruck, Druckabfrage, Enddruck]
     const ATS_SPALTEN: [[&'static str; 4]; 3] = [
@@ -536,7 +649,7 @@ impl Db {
     /// (daraus ergibt sich die Trupp-Nummer 1, 2, 3 …).
     pub fn ats_einsaetze(&self, einsatz_id: i64) -> Result<Vec<AtsEinsatz>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, EinsatzStart, AbgeschlossenUm, COALESCE(Einsatzzeit, 1800),
+            "SELECT id, EinsatzStart, AbgeschlossenUm, COALESCE(Einsatzzeit, 1800), Truppname, COALESCE(Druckabfrage, 0),
                     COALESCE(ATFName, ''), DruckATFStart, DruckATFNachfrage, DruckATFEnde,
                     COALESCE(ATMName, ''), DruckATMStart, DruckATMNachfrage, DruckATMEnde,
                     COALESCE(WTFName, ''), DruckWTFStart, DruckWTFNachfrage, DruckWTFEnde
@@ -548,11 +661,13 @@ impl Db {
                 start: r.get(1)?,
                 ende: r.get(2)?,
                 einsatzzeit: r.get(3)?,
-                namen: [r.get(4)?, r.get(8)?, r.get(12)?],
+                truppname: r.get(4)?,
+                druckabfrage: r.get::<_, i64>(5)? == 1,
+                namen: [r.get(6)?, r.get(10)?, r.get(14)?],
                 druck: [
-                    [r.get(5)?, r.get(6)?, r.get(7)?],
-                    [r.get(9)?, r.get(10)?, r.get(11)?],
-                    [r.get(13)?, r.get(14)?, r.get(15)?],
+                    [r.get(7)?, r.get(8)?, r.get(9)?],
+                    [r.get(11)?, r.get(12)?, r.get(13)?],
+                    [r.get(15)?, r.get(16)?, r.get(17)?],
                 ],
             })
         })?;
@@ -560,13 +675,52 @@ impl Db {
     }
 
     /// Legt einen neuen, noch wartenden Trupp an (EinsatzStart = leer).
-    /// `ATSTruppID` ist im Schema Pflicht, zeigt aber auf keine Tabelle – daher 0.
+    /// Truppname wird vorbelegt mit "Trupp N" (N = laufende Nummer im Einsatz).
     pub fn ats_neu(&self, einsatz_id: i64) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO Atemschutzeinsatz (ATSTruppID, EinsatzID, Einsatzzeit, Erledigt) VALUES (0, ?1, 1800, 0)",
+        let anzahl: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM Atemschutzeinsatz WHERE EinsatzID = ?1",
             params![einsatz_id],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO Atemschutzeinsatz (Truppname, EinsatzID, Einsatzzeit, Druckabfrage, Erledigt)
+             VALUES (?1, ?2, 1800, 0, 0)",
+            params![format!("Trupp {}", anzahl + 1), einsatz_id],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Ändert den Truppnamen.
+    pub fn ats_truppname_setzen(&self, id: i64, name: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE Atemschutzeinsatz SET Truppname = ?1 WHERE id = ?2", params![name, id])?;
+        Ok(())
+    }
+
+    /// Setzt die Spalte `Druckabfrage` automatisch anhand der eingetragenen Werte:
+    /// 1, wenn für jedes eingetragene Truppmitglied (Name vorhanden) ein Druckabfrage-Wert
+    /// gespeichert ist, sonst 0. Wird nach jeder Änderung eines Druckabfrage-Felds aufgerufen.
+    pub fn ats_druckabfrage_aktualisieren(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE Atemschutzeinsatz SET Druckabfrage = CASE WHEN
+                 (ATFName IS NOT NULL OR ATMName IS NOT NULL OR WTFName IS NOT NULL)
+                 AND (ATFName IS NULL OR DruckATFNachfrage IS NOT NULL)
+                 AND (ATMName IS NULL OR DruckATMNachfrage IS NOT NULL)
+                 AND (WTFName IS NULL OR DruckWTFNachfrage IS NOT NULL)
+             THEN 1 ELSE 0 END
+             WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Markiert die Druckabfrage als durchgeführt bzw. nicht durchgeführt.
+    pub fn ats_druckabfrage_setzen(&self, id: i64, erledigt: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE Atemschutzeinsatz SET Druckabfrage = ?1 WHERE id = ?2",
+            params![erledigt as i64, id],
+        )?;
+        Ok(())
     }
 
     /// Speichert den Namen eines Truppmitglieds (`rolle` 0..3). Leerer Text = NULL.

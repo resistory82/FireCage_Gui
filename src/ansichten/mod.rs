@@ -7,6 +7,7 @@
 pub mod atemschutz;
 pub mod austausch;
 pub mod einsatz;
+pub mod erinnerung;
 pub mod konfiguration;
 pub mod start;
 
@@ -97,12 +98,18 @@ pub struct Formulare {
     /// Eingabetexte der Trupp-Tabelle je Trupp-id: [Rolle][Name, Anfangsdruck, Druckabfrage, Enddruck].
     /// Gespeichert wird bei jeder gültigen Änderung; der Text bleibt hier, damit Tippen flüssig geht.
     pub ats_puffer: std::collections::HashMap<i64, [[String; 4]; 3]>,
+    /// Eingabetext des Truppnamens je Trupp-id.
+    pub ats_name_puffer: std::collections::HashMap<i64, String>,
     /// Eingabetext "max. Einsatzzeit (min)" je Trupp-id.
     pub ats_zeit_puffer: std::collections::HashMap<i64, String>,
+    /// Popup "Atemschutzträger wählen", solange geöffnet.
+    pub ats_auswahl: Option<atemschutz::TraegerAuswahl>,
     /// Nach Klick auf "Druckabfrage": Cursor ins erste Druckabfrage-Feld setzen.
     pub ats_fokus_abfrage: bool,
     // Import-Vorschau (Stammdaten), solange der Dialog offen ist
     pub import: Option<austausch::ImportVorschau>,
+    // Popup "Einsatzort zuordnen" für eine Aufgabe
+    pub ort_dialog: Option<einsatz::OrtDialog>,
     // Bestätigungsdialog "Einsatz beenden" ist geöffnet
     pub beenden_dialog: bool,
 }

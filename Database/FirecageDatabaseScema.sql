@@ -191,12 +191,13 @@ CREATE TABLE IF NOT EXISTS "Einsatztyp" (
 
 CREATE TABLE IF NOT EXISTS "Atemschutzeinsatz" (
 	"id" INTEGER NOT NULL,
-	"ATSTruppID" INTEGER NOT NULL,
+	"Truppname" TEXT NOT NULL,
 	"EinsatzID" INTEGER,
 	-- in sekunden
 	"Einsatzzeit" INTEGER,
 	"EinsatzStart" INTEGER,
 	"AbgeschlossenUm" INTEGER,
+	"Druckabfrage" INTEGER CHECK(Druckabfrage IN(0,1)),
 	"Erledigt" INTEGER CHECK(Erledigt IN(0,1)),
 	"ATFName" TEXT,
 	"DruckATFStart" INTEGER,

@@ -25,7 +25,7 @@ pub const ORANGE: Color32 = Color32::from_rgb(240, 170, 60);
 pub const GRUEN: Color32 = Color32::from_rgb(120, 200, 120);
 
 /// Das Firecage-Logo, direkt in die Programmdatei eingebettet.
-pub const LOGO: &[u8] = include_bytes!("../Firecage icon.svg");
+pub const LOGO: &[u8] = include_bytes!("../../Firecage icon.svg");
 
 /// Firecage-Logo als PNG (256×256, transparent) für das Fenster- und Taskleistensymbol.
 /// Fenstersymbole müssen Rastergrafiken sein, daher nicht das SVG.

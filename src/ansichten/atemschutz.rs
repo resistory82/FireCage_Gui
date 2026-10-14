@@ -28,6 +28,12 @@ const ROLLEN_FARBE: [Color32; 3] = [
 /// Spaltenüberschriften der Einzelansicht. Index = Spalte im Eingabepuffer.
 const SPALTEN: [&str; 4] = ["Namen", "Anfangsdruck", "Druckabfrage", "Enddruck"];
 
+/// Breite des Namensfelds: ca. 30 gut lesbare Zeichen bei Schriftgröße 20.
+const NAMENSFELD_BREITE: f32 = 420.0;
+
+/// Höchster zulässiger Druck in bar für alle Druckfelder.
+const MAX_DRUCK: i64 = 350;
+
 /// Knopffarben aus der Zeichnung.
 const KNOPF_GRUEN: Color32 = Color32::from_rgb(100, 200, 140);
 const KNOPF_TUERKIS: Color32 = Color32::from_rgb(100, 200, 200);
@@ -55,7 +61,7 @@ fn druecke(t: &AtsEinsatz, art: usize) -> String {
 }
 
 /// Sekunden seit "Trupp geht vor" (bis jetzt bzw. bis "Trupp zurück").
-fn vergangen(t: &AtsEinsatz, jetzt: i64) -> i64 {
+pub fn vergangen(t: &AtsEinsatz, jetzt: i64) -> i64 {
     match t.start {
         Some(s) => (t.ende.unwrap_or(jetzt) - s).max(0),
         None => 0,
@@ -63,12 +69,16 @@ fn vergangen(t: &AtsEinsatz, jetzt: i64) -> i64 {
 }
 
 /// "mm:ss"
-fn mmss(sek: i64) -> String {
+pub fn mmss(sek: i64) -> String {
     format!("{:02}:{:02}", sek / 60, sek % 60)
 }
 
-/// Hat jedes eingetragene Truppmitglied einen Druckabfrage-Wert?
-fn druckabfrage_vollstaendig(t: &AtsEinsatz) -> bool {
+/// Gilt die Druckabfrage als erledigt? Ja, wenn das Kästchen "Druckabfrage" angehakt ist
+/// oder jedes eingetragene Truppmitglied einen Druckabfrage-Wert hat.
+pub fn druckabfrage_vollstaendig(t: &AtsEinsatz) -> bool {
+    if t.druckabfrage {
+        return true;
+    }
     let besetzt: Vec<usize> = (0..3).filter(|&r| !t.namen[r].trim().is_empty()).collect();
     !besetzt.is_empty() && besetzt.iter().all(|&r| t.druck[r][1].is_some())
 }
@@ -134,11 +144,10 @@ pub fn trupp_leiste(app: &mut App, ctx: &egui::Context, einsatz_id: i64) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
                 let mut offen = 0;
-                // Trupp-Nummer = Position in der Gesamtliste (bleibt stabil)
-                for (i, t) in liste.iter().enumerate().filter(|(_, t)| t.ende.is_none()) {
+                for t in liste.iter().filter(|t| t.ende.is_none()) {
                     offen += 1;
                     let (_, hintergrund, status) = warnstufe(t, jetzt);
-                    let text = format!("Trupp {} | {} min", i + 1, mmss(vergangen(t, jetzt)));
+                    let text = format!("{} | {} min", t.truppname, mmss(vergangen(t, jetzt)));
                     let gewaehlt = app.f.ats_gewaehlt == Some(t.id) && !app.f.ats_tabelle && app.einsatz_tab == EinsatzTab::Atemschutz;
                     let knopf = egui::Button::new(RichText::new(text).size(16.0).strong().color(Color32::WHITE))
                         .fill(hintergrund)
@@ -208,6 +217,11 @@ pub fn zeigen(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
     });
     ui.add_space(10.0);
 
+    // Popup "Atemschutzträger wählen" (über "+" neben dem Namensfeld geöffnet)
+    if app.f.ats_auswahl.is_some() {
+        traeger_dialog(app, ui.ctx(), &liste);
+    }
+
     if app.f.ats_tabelle {
         tabellenansicht(app, ui, &liste, jetzt);
         return;
@@ -219,7 +233,7 @@ pub fn zeigen(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
         app.f.ats_gewaehlt = liste.iter().find(|t| t.ende.is_none()).map(|t| t.id);
     }
     match app.f.ats_gewaehlt.and_then(|g| liste.iter().position(|t| t.id == g)) {
-        Some(i) => einzelansicht(app, ui, &liste[i], i + 1, jetzt),
+        Some(i) => einzelansicht(app, ui, &liste[i], jetzt),
         None => {
             ui.add_space(ui.available_height() * 0.35);
             ui.vertical_centered(|ui| {
@@ -246,22 +260,29 @@ enum Aktion {
     Druckabfrage,
     Zurueck,
     Verwerfen,
+    /// Kästchen "Druckabfrage" angeklickt: neuer Zustand
+    DruckabfrageAbhaken(bool),
 }
 
 /// Einzelansicht eines Trupps: Tabelle, Knöpfe und Einsatzzeit.
-fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, jetzt: i64) {
+fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, jetzt: i64) {
     let gestartet = t.start.is_some();
     let zurueck = t.ende.is_some();
     let (farbe, _, status) = warnstufe(t, jetzt);
 
     // Überschrift
+    // Überschrift mit änderbarem Truppnamen (gespeichert bei jeder Änderung, leer wird nicht gespeichert)
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("ATS Trupp : Trupp {nr}"))
-                .size(30.0)
-                .strong()
-                .color(theme::TEXT_HELL),
-        );
+        ui.label(RichText::new("ATS Trupp :").size(30.0).strong().color(theme::TEXT_HELL));
+        let name = app.f.ats_name_puffer.entry(t.id).or_insert_with(|| t.truppname.clone());
+        let feld = egui::TextEdit::singleline(&mut *name)
+            .font(FontId::proportional(30.0))
+            .desired_width(360.0)
+            .hint_text("Truppname");
+        if ui.add(feld).on_hover_text("Truppname ändern").changed() && !name.trim().is_empty() {
+            let r = app.db.ats_truppname_setzen(t.id, name.trim());
+            app.ok(r);
+        }
         ui.add_space(20.0);
         ui.label(RichText::new(status).size(18.0).color(farbe));
     });
@@ -271,6 +292,7 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
     // Eingaben landen im Puffer; geänderte Zellen werden danach gespeichert.
     let mut aenderungen: Vec<(usize, usize, String)> = Vec::new();
     let mut fokus_abfrage = std::mem::take(&mut app.f.ats_fokus_abfrage);
+    let mut auswahl_rolle: Option<usize> = None; // "+" neben einem Namensfeld geklickt
     let puffer = app.f.ats_puffer.entry(t.id).or_insert_with(|| puffer_aus(t));
     egui::Grid::new(("ats_tabelle", t.id))
         .num_columns(5)
@@ -291,16 +313,36 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
                         2 => gestartet && !zurueck, // Druckabfrage: nur während des Einsatzes
                         _ => gestartet,             // Enddruck: ab Start, auch nachträglich
                     };
+                    // Namensfeld: breit genug für ca. 30 Zeichen (Schriftgröße 20)
                     let feld = egui::TextEdit::singleline(&mut puffer[rolle][spalte])
                         .font(FontId::proportional(20.0))
-                        .desired_width(if spalte == 0 { 320.0 } else { 140.0 })
-                        .hint_text(if spalte == 0 { "Name" } else { "bar" });
-                    let antwort = ui.add_enabled(bearbeitbar, feld);
+                        .desired_width(if spalte == 0 { NAMENSFELD_BREITE } else { 140.0 })
+                        .hint_text(if spalte == 0 { "Nachname Vorname" } else { "bar" })
+                        // Druckfelder: höchstens 3 Stellen (0–350 bar)
+                        .char_limit(if spalte == 0 { usize::MAX } else { 3 });
+                    let antwort = if spalte == 0 {
+                        // Namensfeld + "+" zum Auswählen aus dem Personal (Qualifikation ATS)
+                        ui.horizontal(|ui| {
+                            let a = ui.add_enabled(bearbeitbar, feld);
+                            let plus = ui.add_enabled(bearbeitbar, egui::Button::new(RichText::new("+").size(20.0).strong()));
+                            if plus.on_hover_text("Atemschutzträger aus dem Personal wählen").clicked() {
+                                auswahl_rolle = Some(rolle);
+                            }
+                            a
+                        })
+                        .inner
+                    } else {
+                        ui.add_enabled(bearbeitbar, feld)
+                    };
                     if spalte == 2 && rolle == 0 && fokus_abfrage && bearbeitbar {
                         antwort.request_focus();
                         fokus_abfrage = false;
                     }
                     if antwort.changed() {
+                        // Druckfelder: nur Ziffern zulassen – andere Zeichen werden sofort entfernt
+                        if spalte > 0 {
+                            puffer[rolle][spalte].retain(|c| c.is_ascii_digit());
+                        }
                         aenderungen.push((rolle, spalte, puffer[rolle][spalte].clone()));
                     }
                 }
@@ -308,6 +350,13 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
             }
         });
     speichern(app, t.id, aenderungen);
+    if let Some(rolle) = auswahl_rolle {
+        app.f.ats_auswahl = Some(TraegerAuswahl {
+            trupp_id: t.id,
+            rolle,
+            suche: String::new(),
+        });
+    }
 
     // Max. Einsatzzeit (nur vor dem Start änderbar)
     ui.add_space(10.0);
@@ -356,18 +405,23 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
             aktion = Aktion::Druckabfrage;
         }
         let (zeichen, zeichen_farbe, hilfe) = if druckabfrage_vollstaendig(t) {
-            ("✔", theme::GRUEN, "Druckabfrage für alle Truppmitglieder eingetragen")
+            ("✔", theme::GRUEN, "Druckabfrage erledigt")
         } else {
             ("✖", theme::TEXT_HELL, "Druckabfrage noch nicht vollständig")
         };
-        egui::Frame::none()
-            .stroke(Stroke::new(1.5, theme::TEXT_HELL))
+        // Kästchen: zeigt den Stand und lässt sich anklicken, um die Druckabfrage
+        // als durchgeführt zu markieren bzw. die Markierung zurückzunehmen.
+        let kaestchen = egui::Frame::none()
             .inner_margin(4.0)
             .show(ui, |ui| {
                 ui.label(RichText::new(zeichen).size(24.0).color(zeichen_farbe));
             })
             .response
-            .on_hover_text(hilfe);
+            .interact(Sense::click())
+            .on_hover_text(format!("{hilfe}\nKlicken zum Abhaken / Zurücknehmen"));
+        if gestartet && kaestchen.clicked() {
+            aktion = Aktion::DruckabfrageAbhaken(!t.druckabfrage);
+        }
 
         if !gestartet {
             ui.add_space(30.0);
@@ -409,6 +463,10 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
     match aktion {
         Aktion::Keine => {}
         Aktion::Druckabfrage => app.f.ats_fokus_abfrage = true,
+        Aktion::DruckabfrageAbhaken(wert) => {
+            let r = app.db.ats_druckabfrage_setzen(t.id, wert);
+            app.ok(r);
+        }
         Aktion::Starten => {
             // Mindestbesetzung: ATF und ATM mit Namen und Anfangsdruck
             let ok = (0..2).all(|r| !t.namen[r].trim().is_empty() && t.druck[r][0].is_some());
@@ -423,7 +481,8 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
             let r = app.db.ats_beenden(t.id);
             if app.ok(r).is_some() {
                 app.info(format!(
-                    "Trupp {nr} ist zurück. Bitte den Enddruck eintragen, falls noch nicht geschehen."
+                    "{} ist zurück. Bitte den Enddruck eintragen, falls noch nicht geschehen.",
+                    t.truppname
                 ));
             }
         }
@@ -432,6 +491,7 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
             if app.ok(r).is_some() {
                 app.f.ats_puffer.remove(&t.id);
                 app.f.ats_zeit_puffer.remove(&t.id);
+                app.f.ats_name_puffer.remove(&t.id);
                 app.f.ats_gewaehlt = None;
             }
         }
@@ -441,6 +501,8 @@ fn einzelansicht(app: &mut App, ui: &mut egui::Ui, t: &AtsEinsatz, nr: usize, je
 /// Speichert geänderte Tabellenzellen. Spalte 0 = Name, 1..3 = Drücke.
 /// Ungültige Drücke werden nicht gespeichert, sondern als Fehler gemeldet.
 fn speichern(app: &mut App, id: i64, aenderungen: Vec<(usize, usize, String)>) {
+    // Wurde eine Druckabfrage geändert, danach die Spalte "Druckabfrage" neu berechnen
+    let abfrage_geaendert = aenderungen.iter().any(|(_, spalte, _)| *spalte == 2);
     for (rolle, spalte, text) in aenderungen {
         if spalte == 0 {
             let r = app.db.ats_name_setzen(id, rolle, &text);
@@ -450,10 +512,11 @@ fn speichern(app: &mut App, id: i64, aenderungen: Vec<(usize, usize, String)>) {
         let wert = match optional(&text) {
             None => None,
             Some(t) => match t.parse::<i64>() {
-                Ok(bar) if (0..=400).contains(&bar) => Some(bar),
+                Ok(bar) if (0..=MAX_DRUCK).contains(&bar) => Some(bar),
                 _ => {
+                    // Ungültiger Wert wird nicht gespeichert
                     app.fehler(format!(
-                        "{} {}: bitte ganze Zahl in bar (0–400) eingeben.",
+                        "{} {}: „{t}“ ist ungültig – bitte einen Druck zwischen 0 und {MAX_DRUCK} bar eingeben.",
                         ROLLEN[rolle], SPALTEN[spalte]
                     ));
                     continue;
@@ -463,13 +526,17 @@ fn speichern(app: &mut App, id: i64, aenderungen: Vec<(usize, usize, String)>) {
         let r = app.db.ats_druck_setzen(id, rolle, spalte, wert);
         app.ok(r);
     }
+    if abfrage_geaendert {
+        let r = app.db.ats_druckabfrage_aktualisieren(id);
+        app.ok(r);
+    }
 }
 
 // ───────────────────────────── Tabellenansicht ─────────────────────────────
 
 /// Alle nicht zurückgekehrten Trupps in einer Tabelle. "Öffnen" springt in die Einzelansicht.
 fn tabellenansicht(app: &mut App, ui: &mut egui::Ui, liste: &[AtsEinsatz], jetzt: i64) {
-    let offen: Vec<(usize, &AtsEinsatz)> = liste.iter().enumerate().filter(|(_, t)| t.ende.is_none()).collect();
+    let offen: Vec<&AtsEinsatz> = liste.iter().filter(|t| t.ende.is_none()).collect();
     if offen.is_empty() {
         ui.label("Kein Atemschutztrupp im Einsatz.");
         return;
@@ -495,9 +562,9 @@ fn tabellenansicht(app: &mut App, ui: &mut egui::Ui, liste: &[AtsEinsatz], jetzt
                     ui.strong(kopf);
                 }
                 ui.end_row();
-                for (i, t) in offen {
+                for t in offen {
                     let (farbe, _, status) = warnstufe(t, jetzt);
-                    ui.label(RichText::new(format!("Trupp {}", i + 1)).strong());
+                    ui.label(RichText::new(t.truppname.as_str()).strong());
                     ui.colored_label(farbe, status);
                     for r in 0..3 {
                         let name = if t.namen[r].is_empty() { "–" } else { t.namen[r].as_str() };
@@ -529,7 +596,7 @@ pub fn abgeschlossen(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
     );
     ui.add_space(10.0);
     let liste = app.ok(app.db.ats_einsaetze(einsatz_id)).unwrap_or_default();
-    let fertig: Vec<(usize, &AtsEinsatz)> = liste.iter().enumerate().filter(|(_, t)| t.ende.is_some()).collect();
+    let fertig: Vec<&AtsEinsatz> = liste.iter().filter(|t| t.ende.is_some()).collect();
     if fertig.is_empty() {
         ui.label("Noch kein Trupp zurückgekehrt.");
         return;
@@ -556,8 +623,8 @@ pub fn abgeschlossen(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
                     ui.strong(kopf);
                 }
                 ui.end_row();
-                for (i, t) in fertig {
-                    ui.label(RichText::new(format!("Trupp {}", i + 1)).strong());
+                for t in fertig {
+                    ui.label(RichText::new(t.truppname.as_str()).strong());
                     for r in 0..3 {
                         let name = if t.namen[r].is_empty() { "–" } else { t.namen[r].as_str() };
                         ui.colored_label(ROLLEN_FARBE[r], name);
@@ -578,4 +645,116 @@ pub fn abgeschlossen(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
                 }
             });
     });
+}
+
+// ───────────────────────────── Popup "Atemschutzträger wählen" ─────────────────────────────
+
+/// Zustand des Popups: für welchen Trupp und welche Rolle gewählt wird, plus Suchtext.
+pub struct TraegerAuswahl {
+    pub trupp_id: i64,
+    /// 0 = ATF, 1 = ATM, 2 = WTF
+    pub rolle: usize,
+    pub suche: String,
+}
+
+/// Liste aller aktiven Personen mit Qualifikation "ATS". Ein Klick trägt
+/// "Nachname Vorname" in das Namensfeld ein und speichert sofort.
+/// Personen, die bereits in einem nicht zurückgekehrten Trupp dieses Einsatzes
+/// stehen, sind ausgegraut ("bereits in Trupp N").
+fn traeger_dialog(app: &mut App, ctx: &egui::Context, liste: &[AtsEinsatz]) {
+    let traeger = app.ok(app.db.atemschutztraeger()).unwrap_or_default();
+    let norm = |s: &str| s.trim().to_lowercase();
+    // Bereits eingeteilte Namen: (normalisierter Name, Truppname)
+    let belegt: Vec<(String, String)> = liste
+        .iter()
+        .filter(|t| t.ende.is_none())
+        .flat_map(|t| {
+            t.namen
+                .iter()
+                .filter(|n| !n.trim().is_empty())
+                .map(move |n| (n.trim().to_lowercase(), t.truppname.clone()))
+        })
+        .collect();
+    let Some(d) = app.f.ats_auswahl.as_mut() else { return };
+
+    // Abgedunkelter Hintergrund, fängt Klicks ab
+    egui::Area::new(egui::Id::new("traeger_hintergrund"))
+        .order(egui::Order::Middle)
+        .fixed_pos(egui::Pos2::ZERO)
+        .show(ctx, |ui| {
+            let flaeche = ctx.screen_rect();
+            ui.allocate_rect(flaeche, Sense::click());
+            ui.painter().rect_filled(flaeche, 0.0, Color32::from_black_alpha(170));
+        });
+
+    let mut abbrechen = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut gewaehlt: Option<String> = None;
+
+    egui::Area::new(egui::Id::new("traeger_dialog"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            egui::Frame::window(ui.style()).inner_margin(20.0).show(ui, |ui| {
+                ui.set_width(620.0);
+                ui.label(
+                    RichText::new(format!("Atemschutzträger wählen – {}", ROLLEN[d.rolle]))
+                        .size(24.0)
+                        .strong()
+                        .color(ROLLEN_FARBE[d.rolle]),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Suche");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.suche)
+                            .desired_width(300.0)
+                            .hint_text("Name oder Feuerwehr"),
+                    );
+                });
+                ui.add_space(8.0);
+
+                if traeger.is_empty() {
+                    ui.colored_label(theme::ORANGE, "Kein aktives Personal mit der Qualifikation „ATS“ vorhanden.");
+                    ui.label("Atemschutzträger unter Konfiguration → Personal anlegen (Häkchen bei ATS).");
+                }
+                let suche = norm(d.suche.as_str());
+                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                    for (name, info) in traeger
+                        .iter()
+                        .filter(|(n, i)| suche.is_empty() || norm(n.as_str()).contains(&suche) || norm(i.as_str()).contains(&suche))
+                    {
+                        let im_trupp = belegt.iter().find(|(b, _)| *b == norm(name.as_str())).map(|(_, tn)| tn.clone());
+                        ui.horizontal(|ui| {
+                            let knopf = egui::Button::new(RichText::new(name.as_str()).size(18.0)).min_size(egui::vec2(320.0, 30.0));
+                            if ui.add_enabled(im_trupp.is_none(), knopf).clicked() {
+                                gewaehlt = Some(name.clone());
+                            }
+                            ui.label(info.as_str());
+                            if let Some(nr) = im_trupp {
+                                ui.colored_label(theme::ORANGE, format!("bereits in {nr}"));
+                            }
+                        });
+                    }
+                });
+
+                ui.add_space(12.0);
+                if ui.button("Abbrechen").clicked() {
+                    abbrechen = true;
+                }
+            });
+        });
+
+    if let Some(name) = gewaehlt {
+        let (trupp_id, rolle) = (d.trupp_id, d.rolle);
+        app.f.ats_auswahl = None;
+        let r = app.db.ats_name_setzen(trupp_id, rolle, &name);
+        if app.ok(r).is_some() {
+            // Eingabefeld sofort aktualisieren
+            if let Some(p) = app.f.ats_puffer.get_mut(&trupp_id) {
+                p[rolle][0] = name;
+            }
+        }
+    } else if abbrechen {
+        app.f.ats_auswahl = None;
+    }
 }

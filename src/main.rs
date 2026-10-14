@@ -34,6 +34,8 @@ pub struct App {
     /// Zuletzt geöffneter Einsatz – bestimmt, für welchen Einsatz die
     /// Menüpunkte "Einsatz" in der Seitenleiste gelten.
     pub letzter_einsatz: Option<i64>,
+    /// Eingeblendete Erinnerungen für fällige Aufgaben (siehe ansichten/erinnerung.rs).
+    pub erinnerungen: ansichten::erinnerung::Erinnerungen,
 }
 
 impl App {
@@ -45,6 +47,7 @@ impl App {
             f: Formulare::default(),
             einsatz_tab: EinsatzTab::Aufgaben,
             letzter_einsatz: None,
+            erinnerungen: Default::default(),
         }
     }
 
@@ -261,6 +264,10 @@ impl eframe::App for App {
                     Ansicht::Einsatz(id) => ansichten::einsatz::zeigen(self, ui, id),
                 }
             });
+
+        // Fällige Aufgaben prüfen und als blinkende Erinnerung einblenden (auf jeder Seite)
+        ansichten::erinnerung::pruefen(self, ctx);
+        ansichten::erinnerung::zeigen(self, ctx);
 
         // Import-Vorschau für Stammdaten (erscheint nur, wenn eine Datei geladen wurde)
         ansichten::austausch::dialog(self, ctx);

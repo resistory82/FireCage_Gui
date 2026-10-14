@@ -58,6 +58,8 @@ pub struct Aufgabe {
     pub farbe: Option<String>,
     pub fahrzeug: Option<String>,
     pub abschnitt: Option<String>,
+    /// Einsatzort als Anzeigetext, z. B. "Wohnhaus (Hauptstraße 12, Musterdorf)".
+    pub ort: Option<String>,
 }
 
 /// Ein Eintrag im Funktagebuch.
@@ -82,6 +84,10 @@ pub struct Meldung {
 /// Rollen-Index überall: 0 = ATF (Truppführer), 1 = ATM (Truppmann), 2 = WTF.
 pub struct AtsEinsatz {
     pub id: i64,
+    /// Frei wählbarer Truppname (Standard beim Anlegen: "Trupp 1", "Trupp 2", …).
+    pub truppname: String,
+    /// Druckabfrage als durchgeführt markiert (Kästchen neben "Druckabfrage").
+    pub druckabfrage: bool,
     /// Zeitpunkt "Trupp geht vor"; `None` = Trupp wartet noch.
     pub start: Option<i64>,
     /// Zeitpunkt "Trupp zurück"; `None` = noch nicht zurück.

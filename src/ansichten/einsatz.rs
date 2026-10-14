@@ -186,7 +186,7 @@ fn beenden_dialog(app: &mut App, ctx: &egui::Context, einsatz_id: i64) {
         .into_iter()
         .enumerate()
         .filter(|(_, t)| t.laeuft())
-        .map(|(i, t)| format!("Trupp {} – {}", i + 1, atemschutz::trupp_namen(&t.namen)))
+        .map(|(_, t)| format!("{} – {}", t.truppname, atemschutz::trupp_namen(&t.namen)))
         .collect();
     let aufgaben: Vec<String> = app
         .ok(app.db.aufgaben(einsatz_id))
@@ -325,7 +325,7 @@ fn aufgaben(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("aufgaben")
             .striped(true)
-            .num_columns(7)
+            .num_columns(8)
             .spacing([18.0, 6.0])
             .show(ui, |ui| {
                 for kopf in [
@@ -335,6 +335,7 @@ fn aufgaben(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
                     "Fahrzeug",
                     "Abschnitt",
                     "Nachfragen",
+                    "Einsatzort",
                     "Erledigt",
                 ] {
                     ui.strong(kopf);
@@ -346,11 +347,40 @@ fn aufgaben(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
                     ui.label(a.beschreibung.as_str());
                     ui.label(a.fahrzeug.as_deref().unwrap_or("–"));
                     ui.label(a.abschnitt.as_deref().unwrap_or("–"));
-                    match a.nachfragen_um {
-                        Some(t) if !a.erledigt && t <= jetzt => ui.colored_label(theme::ROT, format!("⚠ {} fällig", uhrzeit(t))),
-                        Some(t) => ui.label(uhrzeit(t)),
-                        None => ui.label("–"),
-                    };
+                    // Nachfragezeit + Menü "⏱" zum Verlängern (nur bei offenen Aufgaben)
+                    ui.horizontal(|ui| {
+                        match a.nachfragen_um {
+                            Some(t) if !a.erledigt && t <= jetzt => ui.colored_label(theme::ROT, format!("⚠ {} fällig", uhrzeit(t))),
+                            Some(t) => ui.label(uhrzeit(t)),
+                            None => ui.label("–"),
+                        };
+                        if !a.erledigt {
+                            ui.menu_button("⏱", |ui| {
+                                ui.label("Nachfragezeit verlängern");
+                                for m in super::erinnerung::VERLAENGERUNG_MIN {
+                                    if ui.button(format!("+{m} min")).clicked() {
+                                        let r = app.db.aufgabe_verlaengern(a.id, m);
+                                        app.ok(r);
+                                        ui.close_menu();
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text("Nachfragezeit verlängern");
+                        }
+                    });
+                    // Einsatzort der Aufgabe + kleiner "+"-Knopf zum Eingeben/Ändern (öffnet Popup)
+                    ui.horizontal(|ui| {
+                        ui.label(a.ort.as_deref().unwrap_or("–"));
+                        if ui.small_button("+").on_hover_text("Einsatzort oder Adresse eingeben").clicked() {
+                            app.f.ort_dialog = Some(OrtDialog {
+                                aufgabe_id: a.id,
+                                aufgabe: format!("{} – {}", a.kategorie, a.beschreibung),
+                                neu: true,
+                                ..Default::default()
+                            });
+                        }
+                    });
                     let mut erledigt = a.erledigt;
                     if ui.checkbox(&mut erledigt, "").changed() {
                         let r = app.db.aufgabe_erledigt(a.id, erledigt);
@@ -360,6 +390,182 @@ fn aufgaben(app: &mut App, ui: &mut egui::Ui, einsatz_id: i64) {
                 }
             });
     });
+
+    // Popup "Einsatzort zuordnen" (nur wenn über "+" geöffnet)
+    if app.f.ort_dialog.is_some() {
+        ort_dialog(app, ui.ctx(), einsatz_id);
+    }
+}
+
+// ───────────────────────────── Popup "Einsatzort zuordnen" ─────────────────────────────
+
+/// Zustand des Popups "Einsatzort zuordnen" (geöffnet über "+" in der Aufgabentabelle).
+/// Wie im Schema: ein Einsatzort hat eine Beschreibung und Koordinaten und/oder eine Adresse.
+#[derive(Default)]
+pub struct OrtDialog {
+    /// Aufgabe, der der Ort zugeordnet wird.
+    pub aufgabe_id: i64,
+    /// Anzeigetext der Aufgabe im Popup.
+    pub aufgabe: String,
+    /// `true` = neuen Ort eingeben, `false` = bestehenden Ort des Einsatzes wählen.
+    pub neu: bool,
+    pub bestehend: Option<i64>,
+    pub beschreibung: String,
+    pub breite: String,
+    pub laenge: String,
+    pub ortschaft: String,
+    pub strasse: String,
+    pub hausnummer: String,
+    pub stiege: String,
+    /// Fehlermeldung, die im Popup angezeigt wird.
+    pub fehler: Option<String>,
+}
+
+/// Zeichnet das Popup über der Oberfläche (Hintergrund abgedunkelt, Escape = abbrechen).
+fn ort_dialog(app: &mut App, ctx: &egui::Context, einsatz_id: i64) {
+    let orte = app.ok(app.db.einsatzorte(einsatz_id)).unwrap_or_default();
+    let Some(d) = app.f.ort_dialog.as_mut() else { return };
+
+    // Abgedunkelter Hintergrund, fängt Klicks ab
+    egui::Area::new(egui::Id::new("ort_hintergrund"))
+        .order(egui::Order::Middle)
+        .fixed_pos(egui::Pos2::ZERO)
+        .show(ctx, |ui| {
+            let flaeche = ctx.screen_rect();
+            ui.allocate_rect(flaeche, egui::Sense::click());
+            ui.painter().rect_filled(flaeche, 0.0, egui::Color32::from_black_alpha(170));
+        });
+
+    let mut abbrechen = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut speichern = false;
+
+    egui::Area::new(egui::Id::new("ort_dialog"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            egui::Frame::window(ui.style()).inner_margin(20.0).show(ui, |ui| {
+                ui.set_width(600.0);
+                ui.heading("Einsatzort zuordnen");
+                ui.label(format!("Aufgabe: {}", d.aufgabe));
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.neu, true, "Neuen Einsatzort eingeben");
+                    ui.add_enabled_ui(!orte.is_empty(), |ui| {
+                        ui.radio_value(&mut d.neu, false, "Bestehenden Einsatzort wählen");
+                    });
+                });
+                ui.add_space(8.0);
+
+                if d.neu {
+                    // Pflichtfelder wie beim neuen Einsatz: Koordinaten ODER Adresse
+                    let adresse_da = [&d.ortschaft, &d.strasse, &d.hausnummer].iter().all(|t| !t.trim().is_empty());
+                    let koord_da = !d.breite.trim().is_empty() && !d.laenge.trim().is_empty();
+                    let pflicht = |optional: bool| if optional { "  (optional)" } else { " *" };
+                    egui::Grid::new("ort_formular").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
+                        ui.label("Beschreibung *");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.beschreibung)
+                                .desired_width(360.0)
+                                .hint_text("z. B. Bereitstellungsraum, Hydrant Nord"),
+                        );
+                        ui.end_row();
+                        ui.label(format!("Breitengrad{}", pflicht(adresse_da)));
+                        ui.add(egui::TextEdit::singleline(&mut d.breite).desired_width(160.0).hint_text("48.20849"));
+                        ui.end_row();
+                        ui.label(format!("Längengrad{}", pflicht(adresse_da)));
+                        ui.add(egui::TextEdit::singleline(&mut d.laenge).desired_width(160.0).hint_text("16.37208"));
+                        ui.end_row();
+                        ui.label(format!("Ortschaft{}", pflicht(koord_da)));
+                        ui.add(egui::TextEdit::singleline(&mut d.ortschaft).desired_width(260.0));
+                        ui.end_row();
+                        ui.label(format!("Straße{}", pflicht(koord_da)));
+                        ui.add(egui::TextEdit::singleline(&mut d.strasse).desired_width(260.0));
+                        ui.end_row();
+                        ui.label(format!("Hausnummer / Stiege{}", pflicht(koord_da)));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut d.hausnummer).desired_width(80.0));
+                            ui.add(egui::TextEdit::singleline(&mut d.stiege).desired_width(60.0).hint_text("Stiege"));
+                        });
+                        ui.end_row();
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Einsatzort");
+                        auswahl_feld(ui, "ort_bestehend", &mut d.bestehend, &orte, None);
+                    });
+                }
+
+                if let Some(f) = &d.fehler {
+                    ui.add_space(6.0);
+                    ui.colored_label(theme::ROT, f.as_str());
+                }
+
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("✔ Speichern").strong()).clicked() {
+                        speichern = true;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        abbrechen = true;
+                    }
+                });
+            });
+        });
+
+    if speichern {
+        match ort_speichern(app, einsatz_id) {
+            Ok(()) => {
+                app.f.ort_dialog = None;
+                app.info("Einsatzort zugeordnet.");
+            }
+            Err(text) => {
+                if let Some(d) = app.f.ort_dialog.as_mut() {
+                    d.fehler = Some(text);
+                }
+            }
+        }
+    } else if abbrechen {
+        app.f.ort_dialog = None;
+    }
+}
+
+/// Prüft die Eingaben des Popups, legt bei Bedarf den neuen Einsatzort an
+/// und ordnet ihn der Aufgabe zu. Fehler werden als Text zurückgegeben.
+fn ort_speichern(app: &mut App, einsatz_id: i64) -> Result<(), String> {
+    let Some(d) = app.f.ort_dialog.as_ref() else { return Ok(()) };
+    let db_fehler = |e: rusqlite::Error| format!("Datenbankfehler: {e}");
+
+    let ort_id = if d.neu {
+        if d.beschreibung.trim().is_empty() {
+            return Err("Bitte eine Beschreibung des Einsatzorts eingeben.".into());
+        }
+        // Koordinaten: beide oder keine, im gültigen Bereich
+        let koordinaten = match (zahl(&d.breite), zahl(&d.laenge)) {
+            (Some(b), Some(l)) if (-90.0..=90.0).contains(&b) && (-180.0..=180.0).contains(&l) => Some((l, b)),
+            (None, None) if d.breite.trim().is_empty() && d.laenge.trim().is_empty() => None,
+            _ => {
+                return Err("Koordinaten ungültig: Breitengrad (-90…90) und Längengrad (-180…180) beide angeben – oder beide leer lassen, wenn eine Adresse eingetragen ist.".into())
+            }
+        };
+        // Adresse: Ortschaft, Straße und Hausnummer zusammen
+        let teile = [&d.ortschaft, &d.strasse, &d.hausnummer];
+        let vollstaendig = teile.iter().all(|t| !t.trim().is_empty());
+        if teile.iter().any(|t| !t.trim().is_empty()) && !vollstaendig {
+            return Err("Adresse unvollständig: Ortschaft, Straße und Hausnummer angeben.".into());
+        }
+        if koordinaten.is_none() && !vollstaendig {
+            return Err("Bitte Koordinaten oder eine Adresse angeben.".into());
+        }
+        let adresse = vollstaendig.then(|| (d.ortschaft.trim(), d.strasse.trim(), d.hausnummer.trim(), optional(&d.stiege)));
+        app.db
+            .einsatzort_anlegen(einsatz_id, d.beschreibung.trim(), koordinaten, adresse)
+            .map_err(db_fehler)?
+    } else {
+        d.bestehend.ok_or_else(|| "Bitte einen Einsatzort wählen.".to_string())?
+    };
+
+    app.db.aufgabe_ort_setzen(d.aufgabe_id, ort_id).map_err(db_fehler)
 }
 
 /// Prüft das Aufgaben-Formular und speichert die Aufgabe.
